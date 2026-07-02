@@ -743,6 +743,25 @@
       margin-top: 8px;
     }
 
+
+    .indicator-admin {
+      margin: 0 0 16px;
+      border: 1px dashed #b7ccff;
+      background: #f8fbff;
+      border-radius: 18px;
+      padding: 16px;
+      display: grid;
+      grid-template-columns: 1fr 170px;
+      gap: 12px;
+      align-items: end;
+    }
+
+    .indicator-admin:hover {
+      border-color: var(--primary);
+      background: #f3f7ff;
+      box-shadow: 0 10px 24px rgba(22, 93, 255, .08);
+    }
+
     .hidden { display: none !important; }
 
     @media (max-width: 980px) {
@@ -1524,16 +1543,24 @@ function fillColleagueSelects() {
           ${ch.fields.length ? `<div class="form-grid" style="margin-bottom:16px">${ch.fields.map((f, fieldIndex) => `<div class="field-box"><label>${f}</label><input data-field="${ch.id}" placeholder="Completează valoarea"><button class="field-remove" tabindex="-1" type="button" title="Elimină câmpul" onclick="removeField('${ch.id}', ${fieldIndex})"><svg class="trash-icon" width="13" height="13" viewBox="0 0 24 24" aria-hidden="true">
   <path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-1 7h2v8H8v-8Zm3 0h2v8h-2v-8Zm3 0h2v8h-2v-8ZM6 8h12l-1 12a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L6 8Z"/>
 </svg></button></div>`).join('')}</div>` : ''}
+          <div class="indicator-admin">
+            <div>
+              <label>Adaugă indicator nou</label>
+              <input id="new-field-${ch.id}" placeholder="Scrie indicatorul">
+            </div>
+            <button class="btn primary add-question-btn" type="button" onclick="addField('${ch.id}')">Adaugă indicator</button>
+          </div>
           <div class="checks">
             ${ch.questions.map((q, i) => `
               <div class="check-row" draggable="true" data-chapter="${ch.id}" data-question-index="${i}" ondragstart="handleQuestionDragStart(event, \'${ch.id}\', ${i})" ondragover="handleQuestionDragOver(event)" ondrop="handleQuestionDrop(event, \'${ch.id}\', ${i})" ondragend="handleQuestionDragEnd(event)">
                 <div class="check-top">
                   <div><div class="question">${q[0]}</div><div class="hint">Observația devine obligatorie la răspuns neconform.</div></div>
                   <select data-bad="${q[1]}" onchange="handleAnswer(this)">
-                    <option value="ok">Conform</option>
-                    <option value="bad">Neconform</option>
+                    <option value="ok" ${q[1]==='yes' ? '' : 'selected'}>Da</option>
+                    <option value="bad" ${q[1]==='yes' ? 'selected' : ''}>Nu</option>
                   </select>
                   <select>
+                    <option>Fără riscuri</option>
                     <option>Risc scăzut</option>
                     <option>Risc mediu</option>
                     <option>Risc ridicat</option>
@@ -1665,8 +1692,8 @@ function fillColleagueSelects() {
 
       saveChaptersConfig();
       draggedQuestion = null;
-      renderSections();
-      activateTab(chapterId);
+      renderSectionsPreservingContent(chapterId);
+      saveAuditContentState();
     }
 
     function handleQuestionDragEnd(event) {
@@ -1674,9 +1701,162 @@ function fillColleagueSelects() {
       draggedQuestion = null;
     }
 
-function saveChaptersConfig() {
-      localStorage.setItem('audit-chapters-v4', JSON.stringify(chapters));
+
+    function makeStateKey(text, bucket) {
+      const base = (text || '').trim();
+      bucket[base] = (bucket[base] || 0) + 1;
+      return base + '##' + bucket[base];
     }
+
+    function captureAuditContentState() {
+      const state = {
+        activeTab: document.querySelector('.audit-section.active')?.id?.replace('section-', '') || '',
+        chapters: {}
+      };
+
+      document.querySelectorAll('.audit-section').forEach(section => {
+        const chapterId = section.id.replace('section-', '');
+        const chapterState = {
+          responsible: section.querySelector(`select[data-responsible="${chapterId}"]`)?.value || '',
+          fields: {},
+          questions: {},
+          generalObs: section.querySelector('textarea[placeholder="Observații suplimentare pentru acest capitol"]')?.value || ''
+        };
+
+        const fieldBucket = {};
+        section.querySelectorAll('.field-box').forEach(box => {
+          const label = box.querySelector('label')?.innerText || '';
+          const key = makeStateKey(label, fieldBucket);
+          chapterState.fields[key] = box.querySelector('input')?.value || '';
+        });
+
+        const questionBucket = {};
+        section.querySelectorAll('.check-row').forEach(row => {
+          const label = row.querySelector('.question')?.innerText || '';
+          const key = makeStateKey(label, questionBucket);
+          const selects = row.querySelectorAll('select');
+          chapterState.questions[key] = {
+            answer: selects[0]?.value || 'ok',
+            risk: selects[1]?.value || 'Risc scăzut',
+            observation: row.querySelector('.obs textarea')?.value || ''
+          };
+        });
+
+        state.chapters[chapterId] = chapterState;
+      });
+
+      return state;
+    }
+
+    function restoreAuditContentState(state) {
+      if (!state || !state.chapters) return;
+
+      document.querySelectorAll('.audit-section').forEach(section => {
+        const chapterId = section.id.replace('section-', '');
+        const chapterState = state.chapters[chapterId];
+        if (!chapterState) return;
+
+        const responsible = section.querySelector(`select[data-responsible="${chapterId}"]`);
+        if (responsible && chapterState.responsible) responsible.value = chapterState.responsible;
+
+        const fieldBucket = {};
+        section.querySelectorAll('.field-box').forEach(box => {
+          const label = box.querySelector('label')?.innerText || '';
+          const key = makeStateKey(label, fieldBucket);
+          if (Object.prototype.hasOwnProperty.call(chapterState.fields, key)) {
+            const input = box.querySelector('input');
+            if (input) input.value = chapterState.fields[key];
+          }
+        });
+
+        const questionBucket = {};
+        section.querySelectorAll('.check-row').forEach(row => {
+          const label = row.querySelector('.question')?.innerText || '';
+          const key = makeStateKey(label, questionBucket);
+          const saved = chapterState.questions[key];
+          if (!saved) return;
+
+          const selects = row.querySelectorAll('select');
+          if (selects[0]) selects[0].value = saved.answer || 'ok';
+          if (selects[1]) selects[1].value = saved.risk || 'Fără riscuri';
+
+          const obs = row.querySelector('.obs');
+          const textarea = row.querySelector('.obs textarea');
+          if (textarea) textarea.value = saved.observation || '';
+          if (obs) obs.classList.toggle('required', isAnswerNonconform(row));
+        });
+
+        const generalObs = section.querySelector('textarea[placeholder="Observații suplimentare pentru acest capitol"]');
+        if (generalObs) generalObs.value = chapterState.generalObs || '';
+      });
+
+      recalc();
+    }
+
+
+    function saveAuditContentState() {
+      try {
+        const state = captureAuditContentState();
+        localStorage.setItem('audit-content-v1', JSON.stringify(state));
+      } catch (error) {
+        console.warn('Starea auditului nu a putut fi salvată.', error);
+      }
+    }
+
+    function loadAuditContentState() {
+      const saved = localStorage.getItem('audit-content-v1');
+      if (!saved) return;
+      try {
+        restoreAuditContentState(JSON.parse(saved));
+      } catch (error) {
+        console.warn('Starea auditului nu a putut fi încărcată.', error);
+      }
+    }
+
+    function setupAuditAutoSave() {
+      document.addEventListener('input', event => {
+        if (event.target.closest('#audit')) saveAuditContentState();
+      });
+
+      document.addEventListener('change', event => {
+        if (event.target.closest('#audit')) saveAuditContentState();
+      });
+    }
+
+
+    function renderSectionsPreservingContent(chapterId) {
+      const state = captureAuditContentState();
+      renderSections();
+      restoreAuditContentState(state);
+      activateTab(chapterId || state.activeTab || chapters.filter(isActiveChapter)[0]?.id);
+    }
+
+
+function saveChaptersConfig() {
+      try {
+        localStorage.setItem('audit-chapters-v4', JSON.stringify(chapters));
+      } catch (error) {
+        console.warn('Configurația întrebărilor nu a putut fi salvată.', error);
+      }
+    }
+
+
+    function addField(chapterId) {
+      const chapter = chapters.find(ch => ch.id === chapterId);
+      const input = document.getElementById('new-field-' + chapterId);
+      const field = input?.value.trim();
+
+      if (!chapter || !field) {
+        showInfoModal('Scrie indicatorul înainte de adăugare.', 'Câmp obligatoriu');
+        return;
+      }
+
+      chapter.fields.push(field);
+      saveChaptersConfig();
+      renderSectionsPreservingContent(chapterId);
+      saveAuditContentState();
+    }
+
 
     async function removeField(chapterId, fieldIndex) {
       const chapter = chapters.find(ch => ch.id === chapterId);
@@ -1687,8 +1867,8 @@ function saveChaptersConfig() {
 
       chapter.fields.splice(fieldIndex, 1);
       saveChaptersConfig();
-      renderSections();
-      activateTab(chapterId);
+      renderSectionsPreservingContent(chapterId);
+      saveAuditContentState();
     }
 
     function getResponsibleOptions() {
@@ -1734,8 +1914,8 @@ function saveChaptersConfig() {
 
       chapter.questions.push([question, badSelect?.value || 'no']);
       saveChaptersConfig();
-      renderSections();
-      activateTab(chapterId);
+      renderSectionsPreservingContent(chapterId);
+      saveAuditContentState();
     }
 
     async function removeQuestion(chapterId, questionIndex) {
@@ -1747,8 +1927,8 @@ function saveChaptersConfig() {
 
       chapter.questions.splice(questionIndex, 1);
       saveChaptersConfig();
-      renderSections();
-      activateTab(chapterId);
+      renderSectionsPreservingContent(chapterId);
+      saveAuditContentState();
     }
 
     function activateTab(id) {
@@ -1758,22 +1938,45 @@ function saveChaptersConfig() {
       document.getElementById('section-' + id).classList.add('active');
     }
 
+
+    function isAnswerNonconform(row) {
+      const select = row.querySelector('select');
+      const badWhen = select?.dataset.bad || 'no';
+
+      if (badWhen === 'yes') return select?.value === 'ok';
+      return select?.value === 'bad';
+    }
+
+
     function handleAnswer(select) {
-      const obs = select.closest('.check-row').querySelector('.obs');
-      obs.classList.toggle('required', select.value === 'bad');
+      const row = select.closest('.check-row');
+      const obs = row.querySelector('.obs');
+      const risk = row.querySelectorAll('select')[1];
+      const nonconform = isAnswerNonconform(row);
+
+      obs.classList.toggle('required', nonconform);
+
+      if (risk) {
+        const current = risk.value;
+        if (current === 'Fără riscuri' || current === 'Risc scăzut') {
+          risk.value = nonconform ? 'Risc scăzut' : 'Fără riscuri';
+        }
+      }
+
       recalc();
+      saveAuditContentState();
     }
 
     function recalc() {
       const rows = [...document.querySelectorAll('.check-row')];
-      const badRows = rows.filter(r => r.querySelector('select').value === 'bad');
+      const badRows = rows.filter(isAnswerNonconform);
       const score = rows.length ? Math.round(((rows.length - badRows.length) / rows.length) * 100) : 100;
       document.getElementById('scoreTotal').innerText = score + '%';
       document.getElementById('issueCount').innerText = badRows.length;
 
       const scores = chapters.filter(isActiveChapter).map(ch => {
         const chRows = rows.filter(r => r.dataset.chapter === ch.id);
-        const chBad = chRows.filter(r => r.querySelector('select').value === 'bad').length;
+        const chBad = chRows.filter(isAnswerNonconform).length;
         const chScore = chRows.length ? Math.round(((chRows.length - chBad) / chRows.length) * 100) : 100;
         const pill = document.getElementById('pill-' + ch.id);
         if (pill) pill.innerText = chScore + '%';
@@ -1812,7 +2015,7 @@ function saveChaptersConfig() {
 
     function getAuditReportData() {
       const rows = [...document.querySelectorAll('.check-row')];
-      const badRows = rows.filter(r => r.querySelector('select')?.value === 'bad');
+      const badRows = rows.filter(isAnswerNonconform);
       const score = rows.length ? Math.round(((rows.length - badRows.length) / rows.length) * 100) : 100;
       const status = score >= 90 ? 'Bine' : score >= 75 ? 'Necesită atenție' : 'Critic';
 
@@ -1835,7 +2038,7 @@ function saveChaptersConfig() {
           })),
           questions: questionRows.map(row => ({
             label: row.querySelector('.question')?.innerText || '',
-            answer: row.querySelector('select')?.value === 'bad' ? 'Neconform' : 'Conform',
+            answer: row.querySelector('select')?.value === 'bad' ? 'Nu' : 'Da',
             risk: row.querySelectorAll('select')[1]?.value || '',
             observation: row.querySelector('.obs textarea')?.value || ''
           })),
@@ -1854,8 +2057,27 @@ function saveChaptersConfig() {
       };
     }
 
+
+    function makePdfFileName(data) {
+      const clean = value => (value || '')
+        .toString()
+        .trim()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .toLowerCase();
+
+      const date = clean(data.date) || new Date().toISOString().slice(0, 10);
+      const depot = clean(data.depot) || 'depozit';
+      const person = clean(data.evaluated) || 'persoana-audiata';
+
+      return `${date}_${depot}_${person}`;
+    }
+
+
     function generateGrowUpPDF() {
       const data = getAuditReportData();
+      const pdfFileName = makePdfFileName(data);
 
       const chaptersHtml = data.chapters.map((ch, index) => {
         const responsibleHtml = ch.responsible
@@ -2130,6 +2352,7 @@ function saveChaptersConfig() {
       win.document.open();
       win.document.write(reportHtml);
       win.document.close();
+      win.document.title = pdfFileName;
       win.focus();
 
       setTimeout(() => {
@@ -2206,6 +2429,7 @@ function saveChaptersConfig() {
     setupNavigation();
     ['hasCar','hasField','hasStock','hasMount'].forEach(id => document.getElementById(id).addEventListener('change', renderSections));
     loadChaptersConfig();
+    setupAuditAutoSave();
     fillColleagueSelects();
     document.getElementById('employeeSelect').addEventListener('change', updateEmployeeDetails);
     document.getElementById('employeeSearch').addEventListener('input', function() { renderEmployeeSuggestions(true); });
